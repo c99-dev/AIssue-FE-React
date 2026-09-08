@@ -18,8 +18,8 @@ npm run dev
 
 ## 📋 주요 기능
 
-- [AIssue-BE-Express](https://github.com/Mai-Nova/AIssue-BE-Express)와 RESTful API 연동
-- [AIssue-BE-Flask](https://github.com/Mai-Nova/AIssue-BE-Flask)와 RESTful API 연동
+- [AIssue-BE-Express](https://github.com/c99-dev/AIssue-BE-Express)와 RESTful API 연동
+- [AIssue-BE-Flask](https://github.com/c99-dev/AIssue-BE-Flask)와 RESTful API 연동
 - GitHub 이슈 정보를 사용자에게 시각적으로 보여주는 기능
 - 사용자 인증 및 관리 (로그인, 회원가입 등)
 - 결제 서비스 관련 UI/UX (토스페이먼츠 연동 백엔드와 연계)
