@@ -29,26 +29,24 @@ export default function IssuePage() {
   const [issue, setIssue] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
-  // eslint-disable-next-line no-unused-vars
-  const [analysisComplete, setAnalysisComplete] = useState(false);
-  const [activeTab, setActiveTab] = useState('issue'); // 탭 상태 추가
+  const [analysisComplete, setAnalysisComplete] = useState(false); // 분석 시도 완료 여부
+  const [activeTab, setActiveTab] = useState('issue');
   const { isConnected } = useNotification();
   console.log(`알림 연결 상태: ${isConnected ? '연결됨' : '끊김'}`);
 
   useEffect(() => {
     const fetchIssue = async () => {
       setLoading(true);
+      setAnalysisComplete(false); // 이슈 변경 시 분석 완료 상태 초기화
       const result = await issueService.getIssueDetail(repoId, issueId);
       if (result.success) {
-        // AI 분석 결과 필드가 없으면 빈 값만 사용 (기존 방식 fallback 제거)
+        const aiAnalysisData = result.data?.aiAnalysis;
         const aiAnalysis = {
-          summary: result.data?.aiAnalysis?.summary || '',
-          relatedFiles: result.data?.aiAnalysis?.relatedFiles || [],
-          codeSnippets: result.data?.aiAnalysis?.codeSnippets || [],
+          summary: aiAnalysisData?.summary || '',
+          relatedFiles: aiAnalysisData?.relatedFiles || [],
+          codeSnippets: aiAnalysisData?.codeSnippets || [],
           suggestion:
-            result.data?.aiAnalysis?.suggestion ||
-            result.data?.solutionSuggestion ||
-            '',
+            aiAnalysisData?.suggestion || result.data?.solutionSuggestion || '',
         };
         console.log('[AIssue] 백엔드에서 받은 AI 분석 결과:', aiAnalysis);
 
@@ -73,11 +71,12 @@ export default function IssuePage() {
           aiAnalysis.summary.trim() !== '' &&
           aiAnalysis.summary !== 'AI 요약 정보 없음';
 
-        // 분석 중이 아니고, 분석 결과가 없을 때만 분석 요청
-        if (!hasAnalysis && !analyzing) {
+        if (hasAnalysis) {
+          setAnalysisComplete(true); // 이미 분석 결과가 있으면 완료로 처리
+        } else if (!analyzing) {
+          // 저장된 분석 결과가 없고, 현재 분석 중도 아니라면 새로 분석 요청
+          // (handleAnalyzeIssue 내부에서 analyzing, analysisComplete 상태 관리)
           handleAnalyzeIssue(issueData);
-        } else {
-          setAnalysisComplete(true);
         }
 
         if (result.data.issueId) {
@@ -91,15 +90,14 @@ export default function IssuePage() {
   }, [repoId, issueId]);
 
   const handleAnalyzeIssue = async (issueData = issue) => {
-    // 분석 중이면 중복 요청 방지
     if (!issueData || analyzing) return;
 
     setAnalyzing(true);
+    // setAnalysisComplete(false); // 분석 시작 시 이전 완료 상태를 초기화할 수 있으나, UX에 따라 결정
     try {
       const result = await issueService.analyzeIssue(repoId, issueId);
 
       if (result.success) {
-        // AI 분석 결과 필드가 없으면 fallback 없이 빈 값만 사용
         const aiAnalysis = {
           summary: result.data?.summary || '',
           relatedFiles: result.data?.relatedFiles || [],
@@ -113,9 +111,9 @@ export default function IssuePage() {
           ...prev,
           aiAnalysis,
         }));
-        setAnalysisComplete(true);
       } else {
         console.error('분석 실패:', result.error);
+        // 실패 시에도 AI 분석 결과는 초기화하거나 이전 상태 유지 (현재는 빈 값으로 설정)
         setIssue((prev) => ({
           ...prev,
           aiAnalysis: {
@@ -128,8 +126,18 @@ export default function IssuePage() {
       }
     } catch (error) {
       console.error('분석 요청 오류:', error);
+      setIssue((prev) => ({
+        ...prev,
+        aiAnalysis: {
+          summary: '',
+          relatedFiles: [],
+          codeSnippets: [],
+          suggestion: '',
+        },
+      }));
     } finally {
       setAnalyzing(false);
+      setAnalysisComplete(true); // 분석 시도 완료 (성공/실패 무관)
     }
   };
 
@@ -158,6 +166,258 @@ export default function IssuePage() {
       </DashboardLayout>
     );
   }
+
+  // AI 분석 결과 표시 부분 수정
+  const renderAiAnalysisContent = () => {
+    if (analyzing) {
+      return (
+        <div className="flex items-center justify-center p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+          <div className="flex items-center space-x-2">
+            <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />
+            <span className="text-sm text-blue-600 dark:text-blue-400 font-medium">
+              AI 분석 중...
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    if (!analysisComplete && !issue.aiAnalysis.summary) {
+      // 아직 분석 시도 전이거나, 초기 로드 시 분석 결과가 없는 경우
+      return (
+        <div className="p-4 text-center text-muted-foreground border rounded-lg bg-background">
+          AI 분석 정보가 없습니다.
+          <Button
+            variant="link"
+            onClick={() => handleAnalyzeIssue()}
+            disabled={analyzing}
+            className="ml-2"
+          >
+            <RefreshCw
+              className={`h-4 w-4 mr-1 ${analyzing ? 'animate-spin' : ''}`}
+            />
+            AI 분석 실행
+          </Button>
+        </div>
+      );
+    }
+
+    if (analysisComplete && !issue.aiAnalysis.summary) {
+      // 분석은 시도했으나, 표시할 요약 정보가 없는 경우 (예: API가 빈 결과 반환)
+      return (
+        <div className="p-4 text-center text-muted-foreground border rounded-lg bg-background">
+          AI 분석이 완료되었으나 표시할 내용이 없습니다.
+          <Button
+            variant="link"
+            onClick={() => handleAnalyzeIssue()}
+            disabled={analyzing}
+            className="ml-2"
+          >
+            <RefreshCw
+              className={`h-4 w-4 mr-1 ${analyzing ? 'animate-spin' : ''}`}
+            />
+            다시 분석
+          </Button>
+        </div>
+      );
+    }
+
+    // 분석 완료 및 결과가 있는 경우
+    return (
+      <div className="border rounded-lg overflow-hidden bg-background">
+        <div className="md:w-full p-4">
+          <div className="space-y-6">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-foreground">
+                  AI 분석 요약
+                </h3>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleAnalyzeIssue()}
+                  disabled={analyzing}
+                  className="h-6 w-6 p-0 hover:bg-muted"
+                >
+                  <RefreshCw
+                    className={`h-3 w-3 ${analyzing ? 'animate-spin' : ''}`}
+                  />
+                </Button>
+              </div>
+              <div className="text-sm text-muted-foreground prose prose-sm max-w-none">
+                <MarkdownRenderer>{issue.aiAnalysis.summary}</MarkdownRenderer>
+              </div>
+            </div>
+
+            {/* 관련 파일 */}
+            <div>
+              <h3 className="text-sm font-medium mb-2 text-foreground">
+                관련 파일
+              </h3>
+              <ul className="space-y-2">
+                {issue.aiAnalysis.relatedFiles &&
+                issue.aiAnalysis.relatedFiles.length > 0 ? (
+                  issue.aiAnalysis.relatedFiles.map((file, index) => (
+                    <li
+                      key={index}
+                      className="p-2 bg-muted/50 rounded-md border"
+                    >
+                      <a
+                        href={
+                          file.githubUrl
+                            ? file.githubUrl
+                            : `https://github.com/${issue.repoFullName}/blob/main/${file.path}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-primary hover:text-primary/80 hover:underline flex items-center gap-1"
+                      >
+                        <Code className="h-3.5 w-3.5" />
+                        <span className="truncate">{file.path}</span>
+                      </a>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        관련도: {file.relevance}%
+                      </p>
+                    </li>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground p-2 text-center bg-muted/30 rounded-md">
+                    관련 파일이 없습니다.
+                  </p>
+                )}
+              </ul>
+            </div>
+
+            {/* 코드 스니펫 */}
+            <div>
+              <h3 className="text-sm font-medium mb-2 text-foreground">
+                코드 스니펫
+              </h3>
+              {issue.aiAnalysis.codeSnippets &&
+              issue.aiAnalysis.codeSnippets.length > 0 ? (
+                <Tabs defaultValue="snippet0" className="w-full">
+                  <TabsList className="w-full bg-muted">
+                    {issue.aiAnalysis.codeSnippets
+                      .slice(0, 3)
+                      .map((_, index) => (
+                        <TabsTrigger
+                          key={index}
+                          value={`snippet${index}`}
+                          className="flex-1 text-xs data-[state=active]:bg-background"
+                        >
+                          스니펫 {index + 1}
+                        </TabsTrigger>
+                      ))}
+                  </TabsList>
+
+                  {issue.aiAnalysis.codeSnippets
+                    .slice(0, 3)
+                    .map((snippet, index) => {
+                      const ext =
+                        snippet.file?.split('.').pop()?.toLowerCase() || '';
+                      const extToLang = {
+                        js: 'javascript',
+                        jsx: 'javascript',
+                        ts: 'typescript',
+                        tsx: 'typescript',
+                        py: 'python',
+                        java: 'java',
+                        go: 'go',
+                        rb: 'ruby',
+                        php: 'php',
+                        c: 'c',
+                        cpp: 'cpp',
+                        cs: 'csharp',
+                        html: 'html',
+                        css: 'css',
+                        json: 'json',
+                        md: 'markdown',
+                        sh: 'bash',
+                        yml: 'yaml',
+                        yaml: 'yaml',
+                        swift: 'swift',
+                        kt: 'kotlin',
+                        rs: 'rust',
+                        dart: 'dart',
+                        sql: 'sql',
+                        // 필요시 추가
+                      };
+                      const lang = extToLang[ext] || '';
+
+                      return (
+                        <TabsContent
+                          key={index}
+                          value={`snippet${index}`}
+                          className="mt-2"
+                        >
+                          <div className="relative border rounded-lg bg-card">
+                            <div className="absolute top-2 right-2 z-10">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 bg-background/80 hover:bg-background"
+                                onClick={() =>
+                                  navigator.clipboard.writeText(snippet.code)
+                                }
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                            <div className="bg-muted/50 p-3 rounded-t-lg text-sm font-mono overflow-x-auto max-h-128">
+                              <MarkdownRenderer>
+                                {` \`\`\`${lang}\n${snippet.code}\n\`\`\` `}
+                              </MarkdownRenderer>
+                            </div>
+                            <div className="p-2 border-t bg-card rounded-b-lg">
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="text-muted-foreground truncate mr-2">
+                                  {snippet.file}
+                                </span>
+                                <span className="text-primary font-medium">
+                                  {snippet.relevance}%
+                                </span>
+                              </div>
+                              {snippet.explanation && (
+                                <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-xs">
+                                  <strong className="text-foreground">
+                                    설명:
+                                  </strong>
+                                  <span className="text-muted-foreground ml-1">
+                                    {snippet.explanation}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </TabsContent>
+                      );
+                    })}
+                </Tabs>
+              ) : (
+                <div className="text-xs text-muted-foreground p-2 text-center bg-muted/30 rounded-md">
+                  AI 코드 스니펫이 없습니다.
+                </div>
+              )}
+            </div>
+
+            {/* AI 해결 제안 */}
+            <div>
+              <h3 className="text-sm font-medium mb-2 text-foreground">
+                AI 해결 제안
+              </h3>
+              <div className="p-3 bg-muted/30 border rounded-lg">
+                <div className="text-sm text-muted-foreground leading-relaxed prose prose-sm max-w-none">
+                  <MarkdownRenderer>
+                    {issue.aiAnalysis.suggestion}
+                  </MarkdownRenderer>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <DashboardLayout>
@@ -327,227 +587,7 @@ export default function IssuePage() {
           </TabsContent>
 
           <TabsContent value="ai" className="mt-0">
-            {analyzing && (
-              <div className="flex items-center justify-center p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                <div className="flex items-center space-x-2">
-                  <Loader2 className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />
-                  <span className="text-sm text-blue-600 dark:text-blue-400 font-medium">
-                    AI 분석 중...
-                  </span>
-                </div>
-              </div>
-            )}
-            {!analyzing && (
-              <>
-                <div className="border rounded-lg overflow-hidden bg-background">
-                  <div className="md:w-full p-4">
-                    <div className="space-y-6">
-                      {/* 분석 중이 아닐 때만 결과 표시 */}
-
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-sm font-medium text-foreground">
-                            AI 분석 요약
-                          </h3>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleAnalyzeIssue()}
-                            disabled={analyzing}
-                            className="h-6 w-6 p-0 hover:bg-muted"
-                          >
-                            <RefreshCw
-                              className={`h-3 w-3 ${
-                                analyzing ? 'animate-spin' : ''
-                              }`}
-                            />
-                          </Button>
-                        </div>
-                        <div className="text-sm text-muted-foreground prose prose-sm max-w-none">
-                          {issue.aiAnalysis.summary ? (
-                            <MarkdownRenderer>
-                              {issue.aiAnalysis.summary}
-                            </MarkdownRenderer>
-                          ) : (
-                            'AI 분석이 완료되지 않았습니다.'
-                          )}
-                        </div>
-                      </div>
-
-                      <div>
-                        <h3 className="text-sm font-medium mb-2 text-foreground">
-                          관련 파일
-                        </h3>
-                        <ul className="space-y-2">
-                          {issue.aiAnalysis.relatedFiles &&
-                          issue.aiAnalysis.relatedFiles.length > 0 ? (
-                            issue.aiAnalysis.relatedFiles.map((file, index) => (
-                              <li
-                                key={index}
-                                className="p-2 bg-muted/50 rounded-md border"
-                              >
-                                <a
-                                  href={
-                                    file.githubUrl
-                                      ? file.githubUrl
-                                      : `https://github.com/${issue.repoFullName}/blob/main/${file.path}`
-                                  }
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sm text-primary hover:text-primary/80 hover:underline flex items-center gap-1"
-                                >
-                                  <Code className="h-3.5 w-3.5" />
-                                  <span className="truncate">{file.path}</span>
-                                </a>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  관련도: {file.relevance}%
-                                </p>
-                              </li>
-                            ))
-                          ) : (
-                            <p className="text-sm text-muted-foreground p-2 text-center bg-muted/30 rounded-md">
-                              관련 파일이 없습니다.
-                            </p>
-                          )}
-                        </ul>
-                      </div>
-
-                      <div>
-                        <h3 className="text-sm font-medium mb-2 text-foreground">
-                          코드 스니펫
-                        </h3>
-                        {issue.aiAnalysis.codeSnippets &&
-                        issue.aiAnalysis.codeSnippets.length > 0 ? (
-                          <Tabs defaultValue="snippet0" className="w-full">
-                            <TabsList className="w-full bg-muted">
-                              {issue.aiAnalysis.codeSnippets
-                                .slice(0, 3)
-                                .map((_, index) => (
-                                  <TabsTrigger
-                                    key={index}
-                                    value={`snippet${index}`}
-                                    className="flex-1 text-xs data-[state=active]:bg-background"
-                                  >
-                                    스니펫 {index + 1}
-                                  </TabsTrigger>
-                                ))}
-                            </TabsList>
-
-                            {issue.aiAnalysis.codeSnippets
-                              .slice(0, 3)
-                              .map((snippet, index) => {
-                                // 파일 확장자 추출 (예: .py, .js 등)
-                                const ext = snippet.file?.split('.').pop()?.toLowerCase() || '';
-                                // 확장자별 언어 매핑
-                                const extToLang = {
-                                  js: 'javascript',
-                                  jsx: 'javascript',
-                                  ts: 'typescript',
-                                  tsx: 'typescript',
-                                  py: 'python',
-                                  java: 'java',
-                                  go: 'go',
-                                  rb: 'ruby',
-                                  php: 'php',
-                                  c: 'c',
-                                  cpp: 'cpp',
-                                  cs: 'csharp',
-                                  html: 'html',
-                                  css: 'css',
-                                  json: 'json',
-                                  md: 'markdown',
-                                  sh: 'bash',
-                                  yml: 'yaml',
-                                  yaml: 'yaml',
-                                  swift: 'swift',
-                                  kt: 'kotlin',
-                                  rs: 'rust',
-                                  dart: 'dart',
-                                  sql: 'sql',
-                                  // 필요시 추가
-                                };
-                                const lang = extToLang[ext] || '';
-
-                                return (
-                                  <TabsContent
-                                    key={index}
-                                    value={`snippet${index}`}
-                                    className="mt-2"
-                                  >
-                                    <div className="relative border rounded-lg bg-card">
-                                      <div className="absolute top-2 right-2 z-10">
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-6 w-6 bg-background/80 hover:bg-background"
-                                          onClick={() =>
-                                            navigator.clipboard.writeText(
-                                              snippet.code
-                                            )
-                                          }
-                                        >
-                                          <Copy className="h-3.5 w-3.5" />
-                                        </Button>
-                                      </div>
-                                      {/* 코드 스니펫을 마크다운 코드블록으로, 언어 지정 포함 */}
-                                      <div className="bg-muted/50 p-3 rounded-t-lg text-sm font-mono overflow-x-auto max-h-128">
-                                        <MarkdownRenderer>
-                                          {` \`\`\`${lang}\n${snippet.code}\n\`\`\` `}
-                                        </MarkdownRenderer>
-                                      </div>
-                                      <div className="p-2 border-t bg-card rounded-b-lg">
-                                        <div className="flex justify-between items-center text-xs">
-                                          <span className="text-muted-foreground truncate mr-2">
-                                            {snippet.file}
-                                          </span>
-                                          <span className="text-primary font-medium">
-                                            {snippet.relevance}%
-                                          </span>
-                                        </div>
-                                        {snippet.explanation && (
-                                          <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-xs">
-                                            <strong className="text-foreground">
-                                              설명:
-                                            </strong>
-                                            <span className="text-muted-foreground ml-1">
-                                              {snippet.explanation}
-                                            </span>
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </TabsContent>
-                                );
-                              })}
-                          </Tabs>
-                        ) : (
-                          <div className="text-xs text-muted-foreground p-2 text-center bg-muted/30 rounded-md">
-                            AI 코드 스니펫이 없습니다.
-                          </div>
-                        )}
-                      </div>
-
-                      <div>
-                        <h3 className="text-sm font-medium mb-2 text-foreground">
-                          AI 해결 제안
-                        </h3>
-                        <div className="p-3 bg-muted/30 border rounded-lg">
-                          <div className="text-sm text-muted-foreground leading-relaxed prose prose-sm max-w-none">
-                            {issue.aiAnalysis.suggestion ? (
-                              <MarkdownRenderer>
-                                {issue.aiAnalysis.suggestion}
-                              </MarkdownRenderer>
-                            ) : (
-                              'AI 해결 제안이 아직 준비되지 않았습니다.'
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
+            {renderAiAnalysisContent()}
           </TabsContent>
         </Tabs>
       </div>
